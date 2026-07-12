@@ -1,0 +1,13 @@
+# build outputs
+firmware/firmware.elf
+firmware/CX_CAN.bin
+*.o
+*.elf
+# factory firmware (EVOffer proprietary - local only, not redistributed)
+reference/*.bin
+# editor / OS
+.vscode/
+.idea/
+*~
+Thumbs.db
+.DS_Store
