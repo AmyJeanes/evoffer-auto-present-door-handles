@@ -42,7 +42,8 @@ silently. What a working app needs here:
   factory left a hardware FWDGT running.
 - **The bootloader already brings up the real clock** (HSE crystal + PLL, ~72 MHz) and
   leaves it running — our app inherits it, so no clock init is needed just to run. We'll add
-  our own deterministic `SystemInit` when exact USART1 baud timing matters (step 3).
+  our own deterministic `SystemInit` when exact USART1 baud timing matters (step 3) — the
+  decoded factory recipe is in [../docs/clock.md](../docs/clock.md).
 - **We fly blind:** the bootloader gates SWD, so there's no live debugger on the running
   app (yet). Bring-up is via **LED diagnostic patterns** — e.g. a *grouped* blink vs an
   *even* blink distinguishes "reached main" from "faulted", independent of clock speed.

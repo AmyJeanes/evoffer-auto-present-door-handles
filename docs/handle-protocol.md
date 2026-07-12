@@ -40,3 +40,20 @@ event-sequenced by **byte 14**.
 Wire any MCU's UART to a PHY6212 module, replicate USART1's power-on init handshake and
 baud (capture it from power-on to see if it's one-way or handshaked), then emit this frame
 with byte 2 / byte 14 set. The handles obey — there's nothing cryptographic to defeat.
+
+## Testing the link (no wiring to the handles needed)
+The ECU→handle link is **wireless**: the GD32 feeds frames over USART1 to the on-board
+**PHY6212 radio**, which transmits over the air to the four handle modules. The handles are
+**paired to this specific ECU** (it's the car's own unit), so:
+
+> **Bench-test path:** power the module (bench setup, SD-flashed with our firmware) **in RF
+> range of the awake car**. Our firmware emitting the present frame should pop the *real*
+> car handles — no handles on the desk, no USART1 capture rig, no CAN. This is the direct
+> validation of the goal (remote open/close).
+
+Order of confidence for building it up:
+1. **Cleanest ground truth** (optional): tap **USART1 TX** with a logic analyzer / serial
+   capture and record a real park-button present vs. a retract — confirms the exact
+   present/retract byte encoding before we transmit anything.
+2. **Live test:** flash firmware that emits the present frame; watch the car handles in RF
+   range. Iterate byte 2 / byte 14 until they pop, then get retract.
