@@ -1,26 +1,21 @@
 /* EVOffer door-handle ECU - custom app skeleton.
  * Target: GD32F303CB (Cortex-M4). App region @ 0x08005000; bootloader untouched.
  *
- * v6 - DECISIVE MINIMAL BISECTION TEST.
+ * Known-good baseline: SystemInit (HSE+PLL ~72MHz) + a slow even blink on PB13.
  *
- * v4 (no clock init, fast blink) and v5 (factory clock init, slow grouped blink) BOTH
- * end up "solid red". The bootloader is proven to hand off to the app (factory app boots
- * with the card in), so our app IS getting control - it dies before toggling the LED.
- *
- * v6 removes every variable to answer one question: "can our code run and blink the LED
- * at all, at whatever clock the bootloader leaves?" So:
- *   - explicit stack-pointer load (don't trust the bootloader's SP hand-off);
- *   - NO system_init (rule out the clock spin-waits);
- *   - blink inlined into the reset handler (no main() call, minimal stack use);
- *   - slow, EVEN blink so it's unmistakable at any clock 8-120 MHz.
- *
- * Outcomes:  slow even blink -> our code runs (v5 died in system_init);
- *            fast even blink  -> a CPU fault (Fault_Handler);
- *            solid red        -> dies on entry (deeper hand-off/linker problem). */
+ * IMPORTANT - stack lives in MID-RAM, not the top. The stock bootloader corrupts the TOP of
+ * RAM when it flashes/launches an app image larger than ~900 bytes, so a stack at 0x2000c000
+ * takes an imprecise bus fault on its first push. Linking the stack at 0x20008000 dodges it and
+ * lets the app be any reasonable size. Full story: docs/bring-up-log.md ("The size-threshold
+ * fault"). This is the fix that unblocked everything past the trivial blink. */
 
 #include <stdint.h>
 
+#define RCU_CTL      (*(volatile uint32_t *)0x40021000u)
+#define RCU_CFG0     (*(volatile uint32_t *)0x40021004u)
+#define RCU_INT      (*(volatile uint32_t *)0x40021008u)
 #define RCU_APB2EN   (*(volatile uint32_t *)0x40021018u)
+#define FMC_WS       (*(volatile uint32_t *)0x40022000u)
 #define GPIOB_CTL1   (*(volatile uint32_t *)0x40010C04u)
 #define GPIOB_BOP    (*(volatile uint32_t *)0x40010C10u)
 #define FWDGT_KR     (*(volatile uint32_t *)0x40003000u)
@@ -41,7 +36,33 @@ static void led_init(void) {
     GPIOB_CTL1 = (GPIOB_CTL1 & ~(0xFu << 20)) | (0x3u << 20);
 }
 
-/* Fault -> distinctly FAST even blink (10x main), so a fault can't be read as "running". */
+/* Factory SystemInit, decoded in docs/clock.md: reset the tree to IRC8M, then HSE + PLL ~72MHz.
+ * Watchdog fed inside every spin so a slow crystal can't reset us. */
+static void system_init(void) {
+    RCU_CTL  |= 0x00000001u;   /* IRC8MEN */
+    RCU_CFG0 &= 0xf8ff0000u;   /* IRC8M as sysclk, clear prescalers */
+    RCU_CTL  &= 0xfef6ffffu;   /* disable PLL + HXTAL */
+    RCU_CTL  &= 0xfffbffffu;   /* clear HXTALBPS */
+    RCU_CFG0 &= 0xff80ffffu;   /* clear PLLSEL/PREDV/PLLMF */
+    RCU_INT   = 0x009f0000u;   /* clear clock interrupt flags */
+
+    RCU_CTL |= 0x00010000u;                        /* HXTALEN */
+    for (uint32_t t = 0; t < 0xffffu; t++) { PET(); if (RCU_CTL & 0x00020000u) break; }
+    if (RCU_CTL & 0x00020000u) {
+        FMC_WS  |= 0x00000010u;                     /* prefetch enable */
+        FMC_WS   = (FMC_WS & ~0x3u) | 0x2u;         /* 2 flash wait states */
+        RCU_CFG0 |= 0x00000400u;                    /* APB1 = /2 */
+        RCU_CFG0 &= 0xffc0ffffu;                    /* clear PLLSEL + PLLMF[3:0] */
+        RCU_CFG0 |= 0x00110000u;                    /* PLLSEL=HXTAL + PLLMF x6 */
+        RCU_CTL  |= 0x01000000u;                    /* PLLEN */
+        while ((RCU_CTL & 0x02000000u) == 0) PET(); /* wait PLLSTB */
+        RCU_CFG0 &= 0xfffffffcu;                    /* clear SCS */
+        RCU_CFG0 |= 0x00000002u;                    /* SCS = PLL */
+        while ((RCU_CFG0 & 0x0000000cu) != 0x8u) PET(); /* wait SCSS = PLL */
+    }
+}
+
+/* Fault -> distinctly FAST even blink, so a fault can't be read as "running". */
 void Fault_Handler(void) {
     led_init();
     for (;;) {
@@ -54,7 +75,7 @@ extern uint32_t _estack;
 
 __attribute__((naked)) void Reset_Handler(void) {
     __asm volatile(
-        "ldr sp, =_estack \n"   /* set OUR stack - don't trust the bootloader's SP */
+        "ldr sp, =_estack \n"   /* set OUR stack (mid-RAM, see linker.ld) - not the bootloader's */
         "cpsid i          \n"   /* mask IRQs the bootloader may have left enabled */
         "b   app_start    \n");
 }
@@ -62,10 +83,11 @@ __attribute__((naked)) void Reset_Handler(void) {
 void app_start(void) {
     PET();
     SCB_VTOR = APP_BASE;
+    system_init();
     led_init();
     for (;;) {                                   /* slow, even, unmistakable blink */
-        GPIOB_BOP = PB13;        wait_fed(150);   /* ON  ~0.4s@120MHz .. ~5.6s@8MHz */
-        GPIOB_BOP = PB13 << 16;  wait_fed(150);   /* OFF */
+        GPIOB_BOP = PB13;        wait_fed(150);
+        GPIOB_BOP = PB13 << 16;  wait_fed(150);
     }
 }
 

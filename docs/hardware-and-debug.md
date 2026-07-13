@@ -80,6 +80,27 @@ register is cleared (`dap dpreg 0 0x1e`). So a clean tool needs **hand-rolled ra
 not OpenOCD built-ins — see `tools/openocd/`. This is *halt/inspect/resume*, not a
 free-running RTT console (that would need running-state memory access, which is gated).
 
+## Getting reliable data out of the flaky gate (what actually works)
+Hard-won during the size-threshold hunt. Once HALTED, raw-AP transfers work but glitch, so:
+- **Memory reads (flash AND RAM) are reliable** at **80–100 kHz** with two tricks: retry each
+  posted DRW read until it doesn't error, and **read until 3 consecutive reads agree** (defeats
+  single-shot glitches). This is trustworthy enough to diff a flashed image against the `.bin`.
+- **Core-register reads via `DCRSR`/`DCRDR` are NOT reliable** — `PC` and `LR` sometimes come
+  through, but `SP`/`MSP`/`xPSR` usually return the previous `DCRDR` value (stale). Don't build
+  conclusions on register reads; **use memory instead.**
+- Because registers are unreliable, get the data into RAM from firmware and read *that*:
+  - **Progress trail:** write a distinct step code to a fixed low-RAM word (e.g. `0x20000000`)
+    before/after each step; SWD-read it to see exactly how far the app got before dying.
+  - **Fault catcher:** set `VTOR` in the *reset handler* (before anything can fault) so your own
+    handler runs; have it record `CFSR` + the stacked frame to a fixed block (e.g. `0x20000040`)
+    then spin. Caveat: a `STKERR` (bus fault during stacking) corrupts the stacked frame, so the
+    recorded faulting-PC can be garbage even though `CFSR`/magic are valid.
+- `DBG_CTL0 (0xE0042004) |= 0x300` (watchdog freeze on halt) and the DBG state **persist across
+  the bootloader's soft resets** — only a power-on reset clears them. A clean power-cycle test
+  (probe unplugged) confirmed the size fault is firmware, not debug-state interference.
+- If a run times out mid-transfer it can orphan `openocd` (probe LEDs stuck on); `taskkill
+  //F //IM openocd.exe` and always end scripts by resuming the core (`DHCSR = 0xA05F0001`).
+
 ## Flashing
 - **Preferred: SD card, no wiring** — see [deploy-and-flashing.md](deploy-and-flashing.md).
 - **SWD write:** possible via connect-under-reset + the `stm32f1x` flash driver (GD32F303 is

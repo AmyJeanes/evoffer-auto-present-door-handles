@@ -4,17 +4,16 @@
  * USART1 config below are faithfully reverse-engineered from the factory firmware
  * (see ../../docs/handle-protocol.md and ../../docs/clock.md), so the DATA is trustworthy.
  *
- * BLOCKER (2026-07-13): on the real board, *any* access to USART1 freezes the app (LED goes
- * "solid"). Ruled out: flash/hardware (the plain v6 blink reflashes and runs fine) and the
- * clock-enable bit (RCU_APB1EN |= 0x20000 = bit17, identical to the factory). Could not yet
- * tell a bus-stall from a caught fault (SWD halt-mode reads are unreliable on this gated
- * chip). Leading theory: the app inherits the bootloader's clock and needs the factory
- * SystemInit (which sets APB1=/2 and the full tree) run BEFORE touching USART1 - the factory
- * always does SystemInit first. Next step: retry SystemInit (docs/clock.md; v5's hang there
- * was the missing SP load, now fixed) in isolation, then add this USART1 code back.
+ * NOTE (root cause found - see docs/bring-up-log.md "The size-threshold fault"): the earlier
+ * "any USART1 access freezes the app" was a RED HERRING. It wasn't the USART - adding this code
+ * grew the image past ~900 bytes and hit a bootloader bug that corrupts the top of RAM. The fix
+ * (link the stack in mid-RAM, _estack = 0x20008000) is now in linker.ld, so a large image runs.
+ * SystemInit and the USART TX path are both fine.
  *
- * To try this build: copy over firmware/src/main.c and rebuild. Runs an open/close loop:
- * present ~5 s (LED on) / idle ~5 s (LED off). Test in RF range of the awake car. */
+ * This emitter is still UNTESTED end-to-end but the transport is sound. To try it: rebase onto
+ * the current firmware/src/main.c (keep SystemInit + the mid-RAM stack), drop in usart1_init +
+ * this frame/emit code, rebuild. Runs an open/close loop: present ~5 s (LED on) / idle ~5 s
+ * (LED off). Test in RF range of the awake car - the paired handles should pop. */
 
 #include <stdint.h>
 

@@ -15,8 +15,12 @@ Two goals:
 - ✅ Bug root-caused; deploy path proven — **no CRC/signature, so it's SD-card flashable**.
 - ✅ **Step 1 done** (tag `v0.1-blink`): custom app builds, SD-flashes, boots and blinks —
   full build→flash→boot→our-code loop proven. See [bring-up-log.md](docs/bring-up-log.md).
-- 🚧 Next: emit the handle **present frame** and test it wirelessly against the car
-  (the ECU reaches its paired handles over RF — see [handle-protocol.md](docs/handle-protocol.md)).
+- ✅ **Size-threshold fault root-caused + fixed**: the bootloader corrupts the top of RAM when
+  launching an app > ~900 bytes, faulting a top-of-RAM stack. Fix: link the stack in mid-RAM
+  (`_estack = 0x20008000`). This unblocks arbitrarily-sized apps. See
+  [bring-up-log.md](docs/bring-up-log.md) ("The size-threshold fault").
+- 🚧 Next: emit the handle **present frame** (now unblocked) and test it wirelessly against the
+  car (the ECU reaches its paired handles over RF — see [handle-protocol.md](docs/handle-protocol.md)).
 
 ## Layout
 | Path | What |

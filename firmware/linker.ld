@@ -8,7 +8,11 @@ MEMORY
   RAM  (rwx) : ORIGIN = 0x20000000, LENGTH = 48K
 }
 
-_estack = ORIGIN(RAM) + LENGTH(RAM);   /* top of RAM = 0x2000C000 */
+/* Stack at MID-RAM (0x20008000), NOT the top of RAM. The stock bootloader corrupts the top of
+ * RAM while flashing/launching an app image larger than ~900 bytes; a stack at 0x2000C000 then
+ * takes an imprecise bus fault on its first push (see docs/bring-up-log.md, "The size-threshold
+ * fault"). 0x20008000 leaves 16 KB of headroom below the corrupted region - ample for this app. */
+_estack = ORIGIN(RAM) + 0x8000;
 
 SECTIONS
 {

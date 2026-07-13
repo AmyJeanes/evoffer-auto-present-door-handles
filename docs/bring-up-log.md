@@ -52,26 +52,43 @@ With no console, encode state in the blink so it's readable regardless of the ac
 - **fast even** vs **slow even** = distinguish two code paths by rate.
 Grouping vs evenness survives clock-speed uncertainty; absolute rate does not.
 
-## Open threads
-- **Deterministic clock:** we currently inherit the bootloader's clock. A faithful copy of
-  the factory `SystemInit` (HSE+PLL) will pin the exact frequency for USART1 baud math.
-- **A real console over the existing 2 SWD wires:** the running app's memory is *gated*
-  while running — only a HALT unlocks it (write DHCSR C_HALT over SWD; freeze the watchdog
-  via `DBG_CTL0 |= 0x300` first). So halt-mode inspection is possible but flaky, and it's
-  not a free-running RTT console. See [hardware-and-debug.md](hardware-and-debug.md).
+## SystemInit and USART1 both work — the "USART blocker" was a red herring
+Re-running the factory `SystemInit` ([clock.md](clock.md)) on the v6 startup blinks cleanly
+(v5's old hang there was the missing SP load, fixed in v6), and configuring USART1 works too.
+The earlier "any USART1 access freezes the app" symptom was **not** the USART — adding USART
+code simply grew the image past a size threshold and tripped the bug below.
 
-## Step 2: driving the handles — USART1 blocker (in progress)
-First attempt at emitting the handle present-frame over USART1 (code:
-[`../firmware/experiments/present-emitter.c`](../firmware/experiments/present-emitter.c)).
-**Any access to USART1 freezes the app** (LED goes solid). What we know:
-- **Not** flash/hardware (the plain v6 blink reflashes and runs fine) and **not** the clock
-  enable (`RCU_APB1EN |= 0x20000` = bit 17, identical to the factory's `FUN_080078e8`).
-- Couldn't tell a bus-stall from a caught fault — the SWD halt-mode reads are too unreliable
-  here to read the live registers/PC.
-- **Leading theory / next step:** the app inherits the bootloader's clock; the factory runs
-  its full `SystemInit` (APB1 = /2, whole tree) *before* it ever touches USART1. Retry
-  `SystemInit` ([clock.md](clock.md)) — v5's hang there was the missing SP load, now fixed —
-  **in isolation first** (does v6+SystemInit still blink?), then add the USART1 code back.
-- Blind SD-flash + LED iteration is slow and ambiguous; getting the debug UART (or a working
-  SystemInit) is likely the real unlock. The frame/transport data itself is fully RE'd and
-  trustworthy — see [handle-protocol.md](handle-protocol.md).
+## The size-threshold fault (root cause + fix)
+**Symptom:** any app image larger than **~900 bytes** faults in the first few instructions — an
+imprecise data bus fault (`CFSR` BFSR bit2 IMPRECISERR + bit4 STKERR) that escalates to
+HardFault. Because it fires before the app sets `VTOR`, it vectors to the **bootloader's**
+HardFault handler (`0x08001098` = `b .` spin), so the LED sits solid / "tiny flash then dead".
+Images ≤ ~884 bytes run fine.
+
+**Proof it's size, not content:** a pure blink with **no USART at all**, padded to 1364 bytes,
+faults identically; the same blink at 824 bytes runs. SWD-verified the flashed image is
+**byte-perfect** (incl. the SP literal) and the FMC controller is clean — so it's a *runtime*
+size-dependent fault, not flash corruption.
+
+**Root cause:** the stock bootloader corrupts the **top of RAM** when it flashes/launches a
+larger image. Our stack lived at `0x2000C000` (top of the 48 KB SRAM), so its first `push`
+(and the exception-stacking that follows) writes into the corrupted region and the bus errors.
+Both the original store *and* the stacking fault — hence IMPRECISERR **and** STKERR, both being
+stack writes near the top.
+
+**Fix:** link the stack in **mid-RAM** (`_estack = 0x20008000`, see
+[../firmware/linker.ld](../firmware/linker.ld)). The same 1364-byte image then runs perfectly —
+SWD confirms `CFSR = 0`, `VTOR = 0x08005000`, 72 MHz PLL, no reset loop. This unblocks arbitrary
+app size (the full present-emitter included).
+
+**Loose end:** the fixed large build blinks slower (~2 s vs 0.6 s) than the small baseline
+despite identical code, confirmed 72 MHz, and no watchdog/reset loop. Benign (health is
+SWD-verified); cause not yet understood.
+
+## Open threads
+- **A real console over the 2 SWD wires:** the running app's memory is *gated* — only a HALT
+  unlocks it (DHCSR C_HALT; freeze the watchdog via `DBG_CTL0 |= 0x300` first). Halt-mode
+  *memory* reads work at low speed with retries; *core-register* reads via DCRSR are flaky.
+  See [hardware-and-debug.md](hardware-and-debug.md).
+- **Next:** build the present-emitter (now unblocked by the RAM fix) and test it wirelessly in
+  range of the car — see [handle-protocol.md](handle-protocol.md).
