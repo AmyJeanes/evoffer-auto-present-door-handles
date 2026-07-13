@@ -55,6 +55,23 @@ Grouping vs evenness survives clock-speed uncertainty; absolute rate does not.
 ## Open threads
 - **Deterministic clock:** we currently inherit the bootloader's clock. A faithful copy of
   the factory `SystemInit` (HSE+PLL) will pin the exact frequency for USART1 baud math.
-- **A real console over the existing 2 SWD wires:** if the running app leaves the debug
-  port accessible (our clean loop doesn't gate it), OpenOCD can poll a RAM buffer the app
-  writes to — an RTT-style console with no extra wiring. To be tested.
+- **A real console over the existing 2 SWD wires:** the running app's memory is *gated*
+  while running — only a HALT unlocks it (write DHCSR C_HALT over SWD; freeze the watchdog
+  via `DBG_CTL0 |= 0x300` first). So halt-mode inspection is possible but flaky, and it's
+  not a free-running RTT console. See [hardware-and-debug.md](hardware-and-debug.md).
+
+## Step 2: driving the handles — USART1 blocker (in progress)
+First attempt at emitting the handle present-frame over USART1 (code:
+[`../firmware/experiments/present-emitter.c`](../firmware/experiments/present-emitter.c)).
+**Any access to USART1 freezes the app** (LED goes solid). What we know:
+- **Not** flash/hardware (the plain v6 blink reflashes and runs fine) and **not** the clock
+  enable (`RCU_APB1EN |= 0x20000` = bit 17, identical to the factory's `FUN_080078e8`).
+- Couldn't tell a bus-stall from a caught fault — the SWD halt-mode reads are too unreliable
+  here to read the live registers/PC.
+- **Leading theory / next step:** the app inherits the bootloader's clock; the factory runs
+  its full `SystemInit` (APB1 = /2, whole tree) *before* it ever touches USART1. Retry
+  `SystemInit` ([clock.md](clock.md)) — v5's hang there was the missing SP load, now fixed —
+  **in isolation first** (does v6+SystemInit still blink?), then add the USART1 code back.
+- Blind SD-flash + LED iteration is slow and ambiguous; getting the debug UART (or a working
+  SystemInit) is likely the real unlock. The frame/transport data itself is fully RE'd and
+  trustworthy — see [handle-protocol.md](handle-protocol.md).
