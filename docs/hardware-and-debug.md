@@ -107,8 +107,10 @@ Hard-won during the size-threshold hunt. Once HALTED, raw-AP transfers work but 
   STM32F1-compatible; FMC unlock keys `0x45670123` / `0xCDEF89AB`, `fmc_unlock`@0x08000c50).
   The SD path is preferred because it needs no wiring and sidesteps the gate.
 
-## ⚠️ Safety
-This drives a car-door latch. Keep `reference/gd32_backup.bin` (full image) and
-`reference/CX_CAN_original.bin` (SD rollback) as the un-brick path; the bootloader region
-(0x08000000–0x08004000) is never written by any app update. Verify interior egress after
-any flash. Stage flashes; don't auto-flash.
+## Scope & rollback
+This ECU only **pops the handles out** (auto-present) and drives their LED effects — the lock,
+latch, and door-open mechanisms are stock Tesla and untouched. Worst case from a bad flash is a
+non-working presenter or an unresponsive ECU, not a door that won't open. Keep
+`reference/gd32_backup.bin` (full image) and `reference/CX_CAN_original.bin` (SD rollback) as the
+recovery path; the bootloader region (0x08000000–0x08004000) is never written by any app update.
+Stage flashes; don't auto-flash.

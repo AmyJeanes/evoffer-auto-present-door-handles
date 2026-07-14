@@ -46,3 +46,9 @@ if (RCU_CTL & 0x00020000u) {                    /* crystal up -> switch to PLL *
 `BAUD` register value straight from the dump — it was computed for this same clock, so the
 same divisor gives the same baud. USART0 (debug) is on APB2 = PCLK2; USART1 (handle link)
 is on APB1 = PCLK1 (which this sets to /2).
+
+> ⚠️ **The ÷16 trap.** Baud = `f_PCLK / (16 × USARTDIV)` — the register holds `USARTDIV`, *not*
+> `f_PCLK / baud`. For the handle link (USART1, 115200, PCLK1 = 36 MHz): `USARTDIV = 36e6 /
+> (16 × 115200) ≈ 19.5`, so **`BAUD = 0x138`**. `0x138` gives 115200; `0x1388` (forgetting the
+> ×16) gives **7200** — a trap that cost us a debugging session. The factory doesn't hit it: it
+> calls the library `usart_init(115200)` (literal `0x1c200` @ `0x080056d4`), which does the math.

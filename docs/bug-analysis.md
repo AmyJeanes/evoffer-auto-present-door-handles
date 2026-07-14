@@ -29,6 +29,15 @@ The firmware prints `lock state %d` / `lock src %d` over its debug UART on every
 event. If a random present is immediately preceded by such a print, 0x339 is confirmed —
 and the printed `lock_src` (values 1/3/4 seen) identifies the passive source to filter.
 
+## Upstream context
+This is a recurring, EVOffer-acknowledged regression, not a one-off. Tesla OTA **2022.32+** changed
+the CAN signals, and each major Tesla update can re-break the decode → "handles keep lighting / don't
+present / **present & retract while parked**." EVOffer's remedy each time is a re-decode shipped as new
+firmware (blog: evoffer.com/2022-10-firmware-update). Corroborated on TMC thread 245984 (the same unit
+is also sold as **Hanshow**); the only official user-side disable is to **unplug the control unit**.
+Amy is on the latest (250105) and still affected → the durable fix lives in the CAN-decode logic
+(IDs / signal bit positions) plus a debounce/gate on the lock-change present path below.
+
 ## Fix options
 - **Debounce** — ignore repeat lock-change pops within ~1–2 s (needs no extra data).
 - **Source gate** — only pop for a real button `lock_src`; ignore passive/walk-away.

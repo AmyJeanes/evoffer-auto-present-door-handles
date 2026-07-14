@@ -85,10 +85,50 @@ app size (the full present-emitter included).
 despite identical code, confirmed 72 MHz, and no watchdog/reset loop. Benign (health is
 SWD-verified); cause not yet understood.
 
+## Step 2 — the present-emitter, and two transport traps (bench-verified, field test pending)
+With arbitrary image size unblocked, `firmware/src/main.c` became the handle **present-frame
+emitter**: `system_init` (72 MHz) → SysTick 1 ms timing → USART1 on PA2 → stream the 23-byte frame
+(see [handle-protocol.md](handle-protocol.md)) in a ~4 s present / ~4 s idle loop. It builds and
+runs cleanly at ~1.3 KB on the mid-RAM stack. But two bugs would each have caused a **silent field
+failure** — handles dead, everything otherwise "looking" fine — and both were caught on the bench
+by SWD, not by watching the LED.
+
+**Trap 1 — USART baud (the ÷16 oversampling).** `BRR = 0x1388` is *wrong*: the USART divides the
+peripheral clock by **16 × USARTDIV**, so `0x1388` @ PCLK1 36 MHz = **7200 baud**, not 115200. The
+dump confirms the factory calls the library `usart_init(115200)` (literal `0x1c200` at
+`0x080056d4`), which computes **`BRR = 0x138`** at 36 MHz. Correct value in code: `0x138`.
+
+**Trap 2 — a GPIO config write dropped right after the RCU clock enable.** SWD read `GPIOA_CTL0`
+back with PA2's nibble = `0x3` (general-purpose output) instead of `0xB` (alternate-function), so
+USART TX was never routed to the pin — it sat as a plain GPIO driven **low** (`ODR.2 = 0`; a UART
+line idles *high*). Chased down cleanly:
+- The debug **read path is faithful** — immutable bit-11-set bootloader words read back exactly,
+  so `0x3` was real, not a read glitch.
+- **Not a GPIO lock** (`GPIOA_LOCK = 0`), and a **debugger** write of `0xB` to the nibble *sticks*
+  — the bit is fully writable.
+- The compiled firmware *does* write `0xB00`, but the disassembly shows it lands **~1 instruction
+  after** `RCU_APB2EN |= GPIOA/AFIO` — inside the peripheral clock's sync window, so the write is
+  dropped. Classic GD32/STM32 "delay after RCC clock enable" gotcha. `led_init`'s GPIOB write and
+  the USART register writes survive only because more cycles pass first; the factory never hits it
+  because it makes function *calls* (burns cycles) between clock-enable and pin config.
+
+**Fix:** a one-line readback barrier — `(void)RCU_APB2EN;` between the clock enable and the PA2
+config write (`usart1_init` in [../firmware/src/main.c](../firmware/src/main.c)). SWD then confirms
+end-to-end: PA2 nibble = `0xB`, `IDR.2 = 1` (pin idles high = live UART), `BAUD = 0x138`,
+`CTL0 = 0x2008`, a firmware frame counter incrementing at ~33 Hz, zero TBE timeouts, `CFSR = 0`.
+The transmit chain is now correct; the only unverified thing left is whether the frame *semantics*
+(`byte2 = 6` + the `byte14` counter) actually pop the handles — which only the car can answer.
+
+> This build carries **temporary bench diagnostics**: the firmware writes `GPIOA_CTL0` / a frame
+> counter / a TBE-timeout counter to free RAM at `0x20000010+` (SWD-readable). Harmless (RAM clears
+> on power-cycle); **strip before the final field build**.
+
 ## Open threads
 - **A real console over the 2 SWD wires:** the running app's memory is *gated* — only a HALT
   unlocks it (DHCSR C_HALT; freeze the watchdog via `DBG_CTL0 |= 0x300` first). Halt-mode
   *memory* reads work at low speed with retries; *core-register* reads via DCRSR are flaky.
   See [hardware-and-debug.md](hardware-and-debug.md).
-- **Next:** build the present-emitter (now unblocked by the RAM fix) and test it wirelessly in
-  range of the car — see [handle-protocol.md](handle-protocol.md).
+- **Next:** field-test the emitter in RF range of the awake car — transport is bench-verified, so
+  the frame *semantics* are the only unknown (see [handle-protocol.md](handle-protocol.md)). On a
+  successful pop: strip the temporary diagnostics and bank Step 2. If it doesn't pop: iterate on
+  `byte2`/`byte14`/`byte13` and cadence, or capture the real USART1-TX frames for ground truth.

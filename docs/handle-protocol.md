@@ -3,6 +3,13 @@
 The single interface to reproduce if you want to drive the handles. **No encryption,
 no rolling code, no pairing key** — a plaintext frame with an additive checksum.
 
+> ⚠️ **Status — UNPROVEN in-vehicle (as of Step 2).** Our firmware now *transmits* this frame with
+> a **bench-verified transmit chain** (correct baud, PA2 in alt-function, frames streaming — see
+> [bring-up-log.md](bring-up-log.md) "Step 2"). What is **not yet confirmed** is that the frame
+> actually makes the handles pop: the exact present encoding below (byte 2 = 6, the byte 14
+> counter, byte 13) is reverse-engineered from the builder, **not** validated against real
+> hardware. The in-vehicle test is what proves it.
+
 ## Physical layer
 - The GD32 does **not** do RF itself. It streams bytes over **USART1** (0x40004400) to a
   radio module (very likely the **PHY6212**), which relays over the air to the four handle
